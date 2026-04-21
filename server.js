@@ -8,6 +8,7 @@ const https = require('https');
 require('dotenv').config();
 
 const { extractOTP } = require('./utils/otpParser');
+const gopayPool = require('./gopayPool');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -113,8 +114,41 @@ app.post('/statusgpay', (req, res) => {
 
     otpData.unshift(entry);
     saveDate();
+
+    // Integrasi Pool: Jika status "reset done", tandai slot sebagai available
+    if (status === 'reset done' && server_number) {
+        gopayPool.markResetDone(server_number);
+    }
     
     res.json({ success: true, message: 'GoPay status saved' });
+});
+
+/**
+ * [NEW] GoPay Pool Endpoints
+ */
+
+// Claim slot yang tersedia
+app.get('/gopay/claim', (req, res) => {
+    const slot = gopayPool.claim();
+    if (slot) {
+        res.json(slot);
+    } else {
+        res.status(503).json({ error: 'All GoPay slots are currently busy or resetting' });
+    }
+});
+
+// Release slot (jika autopay gagal, kembali ke available tanpa reset)
+app.get('/gopay/release', (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'Missing slot id' });
+    
+    const success = gopayPool.release(id);
+    res.json({ success });
+});
+
+// Cek status semua slot untuk monitoring
+app.get('/gopay/status', (req, res) => {
+    res.json(gopayPool.getStatus());
 });
 
 /**
@@ -123,10 +157,20 @@ app.post('/statusgpay', (req, res) => {
  */
 app.get('/trigger-hp', (req, res) => {
     const { action } = req.query;
-    const DEVICE_ID = '75a484c3-631d-4ab6-a5e1-77daae598087';
+    let DEVICE_ID = '75a484c3-631d-4ab6-a5e1-77daae598087'; // Default HP-1
 
     if (!action) {
         return res.status(400).json({ error: 'Missing action identifier' });
+    }
+
+    // Integrasi Pool: Cari Device ID berdasarkan webhook action
+    if (gopayPool.initialized) {
+        const slot = gopayPool.slots.find(s => s.webhook_action === action);
+        if (slot && slot.device_id) {
+            DEVICE_ID = slot.device_id;
+            // Tandai sedang resetting
+            gopayPool.markResetting(slot.id);
+        }
     }
 
     const webhookUrl = `https://trigger.macrodroid.com/${DEVICE_ID}/${action}`;

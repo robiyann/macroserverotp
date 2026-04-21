@@ -2,3 +2,4 @@ node_modules/
 otps.json
 .env
 npm-debug.log
+gopay_pool.json
