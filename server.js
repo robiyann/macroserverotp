@@ -93,6 +93,30 @@ app.post('/receive', (req, res) => {
 });
 
 /**
+ * Endpoint for GoPay Status updates (e.g. Unlink Success).
+ * Body: { text, server_number, PhoneNumber }
+ */
+app.post('/statusgpay', (req, res) => {
+    const { text, server_number, PhoneNumber } = req.body;
+    
+    console.log(`[GoPay] Status update from server ${server_number}: ${text}`);
+
+    const entry = {
+        server_number: server_number || 'Unknown',
+        PhoneNumber: PhoneNumber || 'Unknown',
+        sender: 'GoPay System',
+        text: text || 'No status text provided',
+        otp: null,
+        timestamp: new Date().toISOString()
+    };
+
+    otpData.unshift(entry);
+    saveDate();
+    
+    res.json({ success: true, message: 'GoPay status saved' });
+});
+
+/**
  * Endpoint to trigger MacroDroid on the phone.
  * Query: ?action=your_identifier
  */
