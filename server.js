@@ -160,11 +160,38 @@ app.get('/gopay/reset-all', (req, res) => {
         if (prev !== 'available') {
             console.log(`[Pool] RESET-ALL: Slot ${slot.id} (${prev} -> available)`);
         }
+        
+        // AUTO TRIGGER RESET-LINK on all slots
+        if (slot.device_id && slot.webhook_action) {
+            triggerAction(slot.device_id, slot.webhook_action).catch(() => {});
+        }
     });
     const after = gopayPool.getStatus();
-    console.log(`[Pool] RESET-ALL done. ${after.length} slots reset to available.`);
+    console.log(`[Pool] RESET-ALL done. ${after.length} slots reset to available + webhooks triggered.`);
     res.json({ success: true, before, after });
 });
+
+/**
+ * Helper to trigger MacroDroid
+ */
+function triggerAction(deviceId, action) {
+    return new Promise((resolve, reject) => {
+        const webhookUrl = `https://trigger.macrodroid.com/${deviceId}/${action}`;
+        console.log(`[Trigger] Sending command "${action}" to device ${deviceId}...`);
+        
+        https.get(webhookUrl, (resp) => {
+            let data = '';
+            resp.on('data', (chunk) => { data += chunk; });
+            resp.on('end', () => {
+                console.log(`[Trigger] Webhook response: ${data}`);
+                resolve(data);
+            });
+        }).on('error', (err) => {
+            console.error(`[Trigger] Error: ${err.message}`);
+            reject(err);
+        });
+    });
+}
 
 /**
  * Endpoint to trigger MacroDroid on the phone.
@@ -188,21 +215,9 @@ app.get('/trigger-hp', (req, res) => {
         }
     }
 
-    const webhookUrl = `https://trigger.macrodroid.com/${DEVICE_ID}/${action}`;
-
-    console.log(`[Trigger] Sending command "${action}" to HP...`);
-
-    https.get(webhookUrl, (resp) => {
-        let data = '';
-        resp.on('data', (chunk) => { data += chunk; });
-        resp.on('end', () => {
-            console.log(`[Trigger] Webhook response: ${data}`);
-            res.json({ success: true, message: `Command "${action}" sent to HP`, response: data });
-        });
-    }).on("error", (err) => {
-        console.error(`[Trigger] Error: ${err.message}`);
-        res.status(500).json({ error: 'Failed to trigger MacroDroid', details: err.message });
-    });
+    triggerAction(DEVICE_ID, action)
+        .then(data => res.json({ success: true, message: `Command "${action}" sent to HP`, response: data }))
+        .catch(err => res.status(500).json({ success: false, error: err.message }));
 });
 
 /**
