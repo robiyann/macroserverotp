@@ -4,6 +4,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 require('dotenv').config();
 
 const { extractOTP } = require('./utils/otpParser');
@@ -66,13 +67,8 @@ app.post('/receive', (req, res) => {
         return res.status(400).json({ error: 'Missing sender or text' });
     }
 
+    // Still try to extract OTP if available
     const otp = extractOTP(text);
-    
-    if (!otp) {
-        console.log(`[Warning] No 6-digit OTP found in content: "${text}"`);
-        return res.json({ success: false, message: 'No OTP found in text' });
-    }
-
     const timestamp = new Date().toISOString();
 
     const entry = {
@@ -80,16 +76,49 @@ app.post('/receive', (req, res) => {
         PhoneNumber: PhoneNumber || 'Unknown',
         sender,
         text,
-        otp,
+        otp: otp || null, // null if it's just a status message
         timestamp
     };
 
     otpData.unshift(entry);
     saveDate();
 
-    console.log(`[Success] New OTP Saved: ${otp} for Phone: ${PhoneNumber}`);
+    if (otp) {
+        console.log(`[Success] New OTP Saved: ${otp} for Phone: ${PhoneNumber}`);
+    } else {
+        console.log(`[Status] Notification Saved: "${text.substring(0, 30)}..."`);
+    }
     
     res.json({ success: true, otp });
+});
+
+/**
+ * Endpoint to trigger MacroDroid on the phone.
+ * Query: ?action=your_identifier
+ */
+app.get('/trigger-hp', (req, res) => {
+    const { action } = req.query;
+    const DEVICE_ID = '75a484c3-631d-4ab6-a5e1-77daae598087';
+
+    if (!action) {
+        return res.status(400).json({ error: 'Missing action identifier' });
+    }
+
+    const webhookUrl = `https://trigger.macrodroid.com/${DEVICE_ID}/${action}`;
+
+    console.log(`[Trigger] Sending command "${action}" to HP...`);
+
+    https.get(webhookUrl, (resp) => {
+        let data = '';
+        resp.on('data', (chunk) => { data += chunk; });
+        resp.on('end', () => {
+            console.log(`[Trigger] Webhook response: ${data}`);
+            res.json({ success: true, message: `Command "${action}" sent to HP`, response: data });
+        });
+    }).on("error", (err) => {
+        console.error(`[Trigger] Error: ${err.message}`);
+        res.status(500).json({ error: 'Failed to trigger MacroDroid', details: err.message });
+    });
 });
 
 /**
