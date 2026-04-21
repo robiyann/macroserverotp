@@ -151,6 +151,21 @@ app.get('/gopay/status', (req, res) => {
     res.json(gopayPool.getStatus());
 });
 
+// Reset SEMUA slot ke available (admin/recovery endpoint)
+app.get('/gopay/reset-all', (req, res) => {
+    const before = gopayPool.getStatus();
+    gopayPool.slots.forEach(slot => {
+        const prev = slot.status;
+        slot.status = 'available';
+        if (prev !== 'available') {
+            console.log(`[Pool] RESET-ALL: Slot ${slot.id} (${prev} -> available)`);
+        }
+    });
+    const after = gopayPool.getStatus();
+    console.log(`[Pool] RESET-ALL done. ${after.length} slots reset to available.`);
+    res.json({ success: true, before, after });
+});
+
 /**
  * Endpoint to trigger MacroDroid on the phone.
  * Query: ?action=your_identifier
