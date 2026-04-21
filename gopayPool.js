@@ -92,6 +92,10 @@ class GopayPool {
     markResetDone(id) {
         const slot = this.slots.find(s => s.id == id || s.server_number == id);
         if (slot) {
+            if (slot.status === 'available') {
+                console.log(`[Pool] Slot ${id} reported Reset Done, but was already available. Ignoring.`);
+                return true;
+            }
             slot.status = 'reset_done';
             console.log(`[Pool] Slot ${id} Reset Done -> reset_done (still locked, waiting for release).`);
             return true;
