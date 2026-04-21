@@ -61,12 +61,18 @@ class GopayPool {
     }
 
     release(id) {
-        const slot = this.slots.find(s => s.id == id || s.server_number == id);
-        if (slot) {
+        const index = this.slots.findIndex(s => s.id == id || s.server_number == id);
+        if (index !== -1) {
+            const slot = this.slots[index];
             const prev = slot.status;
             slot.status = 'available';
             slot.claimedAt = null;
-            console.log(`[Pool] Slot ${id} released (${prev} -> available).`);
+            
+            // Round-robin: pindahkan slot ke antrian paling belakang setelah dipakai
+            this.slots.splice(index, 1);
+            this.slots.push(slot);
+
+            console.log(`[Pool] Slot ${id} released (${prev} -> available). Moved to back of queue.`);
             return true;
         }
         return false;
