@@ -35,6 +35,10 @@ function saveDate() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(otpData, null, 2));
 }
 
+// OTP Subscriptions (request queue)
+let subscriptions = []; // { requestId, phone, server, otp, createdAt }
+const SUB_TTL_MS = 90 * 1000; // 90 detik TTL
+
 // Auto-Cleanup logic (Runs every 2 seconds)
 setInterval(() => {
     const now = Date.now();
@@ -49,6 +53,13 @@ setInterval(() => {
     if (otpData.length !== originalLength) {
         console.log(`[Cleanup] Deleted ${originalLength - otpData.length} expired OTPs`);
         saveDate();
+    }
+
+    // Cleanup subscriptions expired
+    const beforeSub = subscriptions.length;
+    subscriptions = subscriptions.filter(s => now - s.createdAt < SUB_TTL_MS);
+    if (subscriptions.length !== beforeSub) {
+        console.log(`[Sub] Cleanup: ${beforeSub - subscriptions.length} expired subscriptions.`);
     }
 }, 2000);
 
@@ -86,6 +97,17 @@ app.post('/receive', (req, res) => {
 
     if (otp) {
         console.log(`[Success] New OTP Saved: ${otp} for Phone: ${PhoneNumber}`);
+        
+        // [NEW] Auto-assign OTP ke subscriber yang cocok
+        const matchingSub = subscriptions.find(s =>
+            s.otp === null &&
+            String(server_number) === s.server &&
+            (PhoneNumber === s.phone || PhoneNumber.includes(s.phone) || s.phone.includes(PhoneNumber))
+        );
+        if (matchingSub) {
+            matchingSub.otp = otp;
+            console.log(`[Sub] OTP ${otp} di-assign ke requestId: ${matchingSub.requestId}`);
+        }
     } else {
         console.log(`[Status] Notification Saved: "${text.substring(0, 30)}..."`);
     }
@@ -218,6 +240,53 @@ app.get('/trigger-hp', (req, res) => {
     triggerAction(DEVICE_ID, action)
         .then(data => res.json({ success: true, message: `Command "${action}" sent to HP`, response: data }))
         .catch(err => res.status(500).json({ success: false, error: err.message }));
+});
+
+/**
+ * [NEW] Bot mendaftar sebagai subscriber OTP untuk phone/server tertentu.
+ * Returns requestId unik yang dipakai untuk poll /otp/claim/:requestId
+ */
+app.post('/otp/subscribe', (req, res) => {
+    const { phone, server } = req.body;
+    if (!phone || !server) {
+        return res.status(400).json({ error: 'Missing phone or server' });
+    }
+    const requestId = require('crypto').randomUUID();
+    const sub = { requestId, phone: String(phone), server: String(server), otp: null, createdAt: Date.now() };
+    subscriptions.push(sub);
+    console.log(`[Sub] New subscription: requestId=${requestId}, phone=${phone}, server=${server}`);
+    res.json({ requestId, ttl: SUB_TTL_MS / 1000 });
+});
+
+/**
+ * [NEW] Bot poll untuk mendapatkan OTP yang sudah di-assign ke requestId-nya.
+ * Jika sudah ada OTP, langsung consume (hapus subscription).
+ */
+app.get('/otp/claim/:requestId', (req, res) => {
+    const { requestId } = req.params;
+    const now = Date.now();
+
+    const idx = subscriptions.findIndex(s => s.requestId === requestId);
+    if (idx === -1) {
+        return res.status(404).json({ error: 'Subscription not found or expired' });
+    }
+    
+    const sub = subscriptions[idx];
+    
+    // Cek TTL
+    if (now - sub.createdAt > SUB_TTL_MS) {
+        subscriptions.splice(idx, 1);
+        return res.status(404).json({ error: 'Subscription expired' });
+    }
+    
+    if (sub.otp) {
+        // Consume: hapus subscription setelah diklaim
+        subscriptions.splice(idx, 1);
+        console.log(`[Sub] requestId ${requestId} claimed OTP ${sub.otp}. Subscription consumed.`);
+        res.json({ otp: sub.otp, phone: sub.phone, server: sub.server });
+    } else {
+        res.status(404).json({ error: 'OTP not yet received' });
+    }
 });
 
 /**
