@@ -250,7 +250,8 @@ app.get('/trigger-hp', (req, res) => {
 
     // Integrasi Pool: Cari Device ID berdasarkan webhook action
     if (gopayPool.initialized) {
-        const slot = gopayPool.slots.find(s => s.webhook_action === action);
+        const slots = gopayPool._loadState();
+        const slot = slots.find(s => s.webhook_action === action);
         if (slot && slot.device_id) {
             DEVICE_ID = slot.device_id;
             // Tandai sedang resetting
