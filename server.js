@@ -214,6 +214,70 @@ app.get('/gopay/reset-all', (req, res) => {
     res.json({ success: true, resetCount: changedSlots.length, before, after });
 });
 
+// [NEW] Tambah slot GoPay baru ke pool (live, tanpa restart)
+app.post('/gopay/add', (req, res) => {
+    const { phone, pin, device_id, webhook_action } = req.body;
+    if (!phone || !pin || !device_id || !webhook_action) {
+        return res.status(400).json({ error: 'Missing required fields: phone, pin, device_id, webhook_action' });
+    }
+
+    try {
+        // Baca config yang ada
+        const CONFIG_FILE = path.join(__dirname, 'gopay_pool.json');
+        let configData = [];
+        if (fs.existsSync(CONFIG_FILE)) {
+            configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        }
+
+        // Generate ID baru (max existing id + 1)
+        const newId = configData.length > 0 ? Math.max(...configData.map(s => s.id || 0)) + 1 : 1;
+
+        // Cek duplikat phone
+        if (configData.some(s => String(s.phone) === String(phone))) {
+            return res.status(409).json({ error: `Nomor ${phone} sudah ada di pool!` });
+        }
+
+        const newSlot = { id: newId, phone: String(phone), pin: String(pin), device_id, webhook_action };
+        configData.push(newSlot);
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+
+        // Reload pool langsung tanpa restart
+        const reloadResult = gopayPool.reload();
+        logHelper('[POOL_ADMIN]', `Slot baru ditambah: HP ${phone} (ID: ${newId}). Total: ${reloadResult?.count || '?'} slot.`);
+        res.json({ success: true, id: newId, slot: newSlot, pool: reloadResult });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// [NEW] Hapus slot GoPay dari pool (live, tanpa restart)
+app.delete('/gopay/remove', (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'Missing slot id' });
+
+    try {
+        const CONFIG_FILE = path.join(__dirname, 'gopay_pool.json');
+        let configData = [];
+        if (fs.existsSync(CONFIG_FILE)) {
+            configData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        }
+
+        const before = configData.length;
+        configData = configData.filter(s => s.id != id);
+
+        if (configData.length === before) {
+            return res.status(404).json({ error: `Slot ID ${id} tidak ditemukan` });
+        }
+
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(configData, null, 2));
+        const reloadResult = gopayPool.reload();
+        logHelper('[POOL_ADMIN]', `Slot ID ${id} dihapus dari pool. Total: ${reloadResult?.count || '?'} slot.`);
+        res.json({ success: true, removed: id, pool: reloadResult });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 /**
  * Helper to trigger MacroDroid
  */
@@ -383,6 +447,15 @@ app.get('/', (req, res) => {
             .badge-available { background: #1e7e34; color: white; }
             .badge-in_use { background: #d39e00; color: #1a1a1a; }
             .badge-resetting { background: #117a8b; color: white; }
+            .btn-del { background: #c0392b; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+            .btn-del:hover { background: #922b21; }
+            .add-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: flex-end; }
+            .add-form input { background: #3d3d3d; border: 1px solid #555; color: #e0e0e0; padding: 8px 10px; border-radius: 4px; font-size: 0.9em; flex: 1; min-width: 130px; }
+            .add-form input::placeholder { color: #888; }
+            .add-form input:focus { outline: none; border-color: #28a745; }
+            .btn-add { background: #28a745; color: white; border: none; padding: 9px 20px; border-radius: 4px; cursor: pointer; font-size: 0.9em; white-space: nowrap; }
+            .btn-add:hover { background: #1e7e34; }
+            .msg-box { margin-top: 10px; padding: 8px 14px; border-radius: 4px; font-size: 0.9em; display: none; }
         </style>
         <script>
             setTimeout(() => location.reload(), 5000);
@@ -399,10 +472,13 @@ app.get('/', (req, res) => {
                     <tr>
                         <th>ID (Srv)</th>
                         <th>Phone</th>
+                        <th>PIN</th>
+                        <th>Webhook Action</th>
                         <th>Status</th>
-                        <th>Total Used</th>
-                        <th>Total Reset</th>
-                        <th>Recent History</th>
+                        <th>Used</th>
+                        <th>Reset</th>
+                        <th>History</th>
+                        <th>Aksi</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -416,19 +492,78 @@ app.get('/', (req, res) => {
                         ).join('');
 
                         return `
-                        <tr>
+                        <tr id="row-slot-${s.id}">
                             <td style="color: #ffa500; font-weight:bold;">${s.id}</td>
                             <td style="color: #00d4ff;">${s.phone}</td>
+                            <td style="color: #bbb; font-size:0.85em;">${s.pin || '-'}</td>
+                            <td style="color: #bbb; font-size:0.85em;">${s.webhook_action || '-'}</td>
                             <td><span class="status-badge ${statusClass}">${s.status}</span></td>
                             <td style="font-weight:bold; color: #fff;">${s.usageCount || 0}x</td>
                             <td style="color: #bbb;">${s.resetCount || 0}x</td>
-                            <td style="max-width: 300px; font-size: 0.9em; line-height:1.2;">${historyHtml || '<i style="color:#666">No Activity</i>'}</td>
+                            <td style="max-width: 220px; font-size: 0.9em; line-height:1.2;">${historyHtml || '<i style="color:#666">No Activity</i>'}</td>
+                            <td><button class="btn-del" onclick="removeSlot(${s.id})">Hapus</button></td>
                         </tr>
                         `;
-                    }).join('') || '<tr><td colspan="6" style="text-align:center;">No pool data</td></tr>'}
+                    }).join('') || '<tr><td colspan="9" style="text-align:center;">No pool data</td></tr>'}
                 </tbody>
             </table>
+
+            <h2 style="margin-top:24px;">➕ Tambah Slot GoPay Baru</h2>
+            <div class="add-form">
+                <input id="inp-phone" type="text" placeholder="No HP (tanpa 0/+62, mis: 85848101010)">
+                <input id="inp-pin" type="text" placeholder="PIN GoPay (mis: 120402)" style="max-width:160px;">
+                <input id="inp-device" type="text" placeholder="MacroDroid Device ID (UUID)">
+                <input id="inp-webhook" type="text" placeholder="Webhook Action (mis: reset-link-13)" style="max-width:220px;">
+                <button class="btn-add" onclick="addSlot()">+ Tambah Slot</button>
+            </div>
+            <div id="add-msg" class="msg-box"></div>
         </div>
+        <script>
+            async function addSlot() {
+                const phone = document.getElementById('inp-phone').value.trim();
+                const pin = document.getElementById('inp-pin').value.trim();
+                const device_id = document.getElementById('inp-device').value.trim();
+                const webhook_action = document.getElementById('inp-webhook').value.trim();
+                const msgBox = document.getElementById('add-msg');
+                if (!phone || !pin || !device_id || !webhook_action) {
+                    msgBox.style.display = 'block'; msgBox.style.background = '#7b241c';
+                    msgBox.textContent = '⚠️ Semua field harus diisi!'; return;
+                }
+                try {
+                    const res = await fetch('/gopay/add', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone, pin, device_id, webhook_action })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        msgBox.style.display = 'block'; msgBox.style.background = '#1e7e34';
+                        msgBox.textContent = '✅ Slot HP ' + phone + ' berhasil ditambahkan (ID: ' + data.id + '). Halaman akan refresh...';
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        msgBox.style.display = 'block'; msgBox.style.background = '#7b241c';
+                        msgBox.textContent = '❌ Gagal: ' + data.error;
+                    }
+                } catch(e) {
+                    msgBox.style.display = 'block'; msgBox.style.background = '#7b241c';
+                    msgBox.textContent = '❌ Error: ' + e.message;
+                }
+            }
+            async function removeSlot(id) {
+                if (!confirm('Hapus slot ID ' + id + ' dari pool? Aksi ini tidak bisa dibatalkan.')) return;
+                try {
+                    const res = await fetch('/gopay/remove?id=' + id, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (res.ok) {
+                        const row = document.getElementById('row-slot-' + id);
+                        if (row) row.style.opacity = '0.3';
+                        setTimeout(() => location.reload(), 800);
+                    } else {
+                        alert('Gagal hapus: ' + data.error);
+                    }
+                } catch(e) { alert('Error: ' + e.message); }
+            }
+        </script>
 
         <div class="container">
             <h2>Live OTP Logs</h2>
