@@ -16,9 +16,20 @@ const DATA_FILE = path.join(__dirname, 'otps.json');
 
 // Middleware
 app.use(cors());
-app.use(morgan('dev'));
+
+// Filter log web agar tidak nge-spam setiap kali halaman dashboard / di-reload
+app.use(morgan(':method :url :status - :response-time ms', {
+    skip: function (req, res) { return req.url === '/' || req.url === '/gopay/status'; }
+}));
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Helper logger function buat debugging yang lebih cantik & bersih
+const logHelper = (prefix, message) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    console.log(`[${time}] ${prefix.padEnd(16)} | ${message}`);
+};
 
 // Load or Initialize OTP Data
 let otpData = [];
@@ -51,7 +62,7 @@ setInterval(() => {
     });
 
     if (otpData.length !== originalLength) {
-        console.log(`[Cleanup] Deleted ${originalLength - otpData.length} expired OTPs`);
+        logHelper('[CLEANUP]', `Terhapus ${originalLength - otpData.length} OTP lama yg expired (30d)`);
         saveDate();
     }
 
@@ -59,7 +70,7 @@ setInterval(() => {
     const beforeSub = subscriptions.length;
     subscriptions = subscriptions.filter(s => now - s.createdAt < SUB_TTL_MS);
     if (subscriptions.length !== beforeSub) {
-        console.log(`[Sub] Cleanup: ${beforeSub - subscriptions.length} expired subscriptions.`);
+        logHelper('[SUBSCRIPTION]', `Timeout: ${beforeSub - subscriptions.length} antrean subsription OTP bot dibuang`);
     }
 }, 2000);
 
@@ -72,10 +83,10 @@ setInterval(() => {
 app.post('/receive', (req, res) => {
     const { sender, text, server_number, PhoneNumber } = req.body;
     
-    console.log(`[Incoming] Request from MacroDroid: server=${server_number}, phone=${PhoneNumber}`);
+    logHelper('[MACRODROID]', `Notif masuk | Srv: ${server_number || '?'} | No: ${PhoneNumber || '?'}`);
 
     if (!sender || !text) {
-        console.log(`[Error] Missing sender or text in payload:`, req.body);
+        logHelper('[MACRODROID]', `Error: Payload tidak lengkap! sender/text kosong`);
         return res.status(400).json({ error: 'Missing sender or text' });
     }
 
@@ -96,7 +107,7 @@ app.post('/receive', (req, res) => {
     saveDate();
 
     if (otp) {
-        console.log(`[Success] New OTP Saved: ${otp} for Phone: ${PhoneNumber}`);
+        logHelper('[OTP_SAVED]', `Berhasil tangkap OTP: ${otp} (Untuk no: ${PhoneNumber})`);
         
         // [NEW] Auto-assign OTP ke subscriber yang cocok
         const matchingSub = subscriptions.find(s =>
@@ -106,10 +117,10 @@ app.post('/receive', (req, res) => {
         );
         if (matchingSub) {
             matchingSub.otp = otp;
-            console.log(`[Sub] OTP ${otp} di-assign ke requestId: ${matchingSub.requestId}`);
+            logHelper('[OTP_MATCH!]', `>> OTP ${otp} langsung didistribusikan ke antrean request bot!`);
         }
     } else {
-        console.log(`[Status] Notification Saved: "${text.substring(0, 30)}..."`);
+        logHelper('[MACRODROID]', `Teks Normal Disimpan: "${text.substring(0, 30).replace(/\n/g, ' ')}..."`);
     }
     
     res.json({ success: true, otp });
@@ -122,7 +133,7 @@ app.post('/receive', (req, res) => {
 app.post('/statusgpay', (req, res) => {
     const { text, server_number, PhoneNumber, status } = req.body;
     
-    console.log(`[GoPay] Status update [${status || 'INFO'}]: ${text}`);
+    logHelper('[WEBHOOK_HP]', `Laporan Link Reset (${status || 'INFO'}): ${text}`);
 
     const entry = {
         server_number: server_number || 'Unknown',
@@ -188,7 +199,7 @@ app.get('/gopay/reset-all', (req, res) => {
     });
 
     const after = gopayPool.getStatus();
-    console.log(`[Pool] RESET-ALL done. ${changedSlots.length} slots reset to available + webhooks triggered.`);
+    logHelper('[POOL_ADMIN]', `Command Reset-All dieksekusi. Menyegarkan ${changedSlots.length} HP & Menembak ulang webhooks.`);
     res.json({ success: true, resetCount: changedSlots.length, before, after });
 });
 
@@ -198,13 +209,13 @@ app.get('/gopay/reset-all', (req, res) => {
 function triggerAction(deviceId, action) {
     return new Promise((resolve, reject) => {
         const webhookUrl = `https://trigger.macrodroid.com/${deviceId}/${action}`;
-        console.log(`[Trigger] Sending command "${action}" to device ${deviceId}...`);
+        logHelper('[TRIGGER_HP]', `Menembak webhook command "${action}" ke Device HP...`);
         
         https.get(webhookUrl, (resp) => {
             let data = '';
             resp.on('data', (chunk) => { data += chunk; });
             resp.on('end', () => {
-                console.log(`[Trigger] Webhook response: ${data}`);
+                logHelper('[TRIGGER_HP]', `Respon HP: ${data}`);
                 resolve(data);
             });
         }).on('error', (err) => {
@@ -253,7 +264,7 @@ app.post('/otp/subscribe', (req, res) => {
     const requestId = require('crypto').randomUUID();
     const sub = { requestId, phone: String(phone), server: String(server), otp: null, createdAt: Date.now() };
     subscriptions.push(sub);
-    console.log(`[Sub] New subscription: requestId=${requestId}, phone=${phone}, server=${server}`);
+    logHelper('[BOT_SUBSCRIBE]', `Bot (Srv #${server}) standby bersiap menangkap SMS dari HP: ${phone}`);
     res.json({ requestId, ttl: SUB_TTL_MS / 1000 });
 });
 
@@ -281,7 +292,7 @@ app.get('/otp/claim/:requestId', (req, res) => {
     if (sub.otp) {
         // Consume: hapus subscription setelah diklaim
         subscriptions.splice(idx, 1);
-        console.log(`[Sub] requestId ${requestId} claimed OTP ${sub.otp}. Subscription consumed.`);
+        logHelper('[BOT_CLAIM!]', `Bot sukses mengambil OTP [ ${sub.otp} ]. Proses selesai.`);
         res.json({ otp: sub.otp, phone: sub.phone, server: sub.server });
     } else {
         res.status(404).json({ error: 'OTP not yet received' });

@@ -61,9 +61,11 @@ class GopayPool {
         fs.writeFileSync(this.statePath, JSON.stringify(stateArray, null, 2));
     }
 
-    get slots() {
-        // Fallback for direct array access in server.js reset-all trigger
-        return this._loadState();
+    _logPool(message, isError = false) {
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const prefix = '[POOL_MGR]'.padEnd(16);
+        if (isError) console.error(`[${time}] ${prefix} | ERROR: ${message}`);
+        else console.log(`[${time}] ${prefix} | ${message}`);
     }
 
     load() {
@@ -84,13 +86,13 @@ class GopayPool {
                     
                     this._saveState(newSlots);
                     this.initialized = true;
-                    console.log(`[Pool] Loaded ${newSlots.length} GoPay slots. Mode: Anti-Collision PM2`);
+                    this._logPool(`Memuat ${newSlots.length} Data GoPay. Mode: Anti-Collision PM2 Active!`);
                 } else {
-                    console.log(`[Pool] Configuration file not found at ${this.configPath}. Fallback to manual mode.`);
+                    this._logPool(`Config tidak ditemukan di ${this.configPath}. Fallback manual.`, true);
                     this.initialized = false;
                 }
             } catch (e) {
-                console.error('[Pool] Error loading config:', e.message);
+                this._logPool(`Gagal load pool config: ${e.message}`, true);
                 this.initialized = false;
             }
         });
@@ -113,7 +115,7 @@ class GopayPool {
                         slot.status = 'available';
                         slot.claimedAt = null;
                         changed = true;
-                        console.log(`[Pool] TTL EXPIRED: Slot ${slot.id} was stuck in ${prevStatus} for >5m. Force reset to available.`);
+                        this._logPool(`TTL EXPIRED: Antrean Slot ${slot.id} macet selama lebih dari 5 Menit. Paksa hapus ke 'Available'.`);
                     }
                 });
 
@@ -156,7 +158,7 @@ class GopayPool {
                 slots.push(slot);
                 
                 this._saveState(slots);
-                console.log(`[Pool] Slot ${id} released (${prev} -> available). Moved to back of queue.`);
+                this._logPool(`Slot ${id} dibebaskan (${prev} -> available). Antrean digeser ke belakang.`);
                 return true;
             }
             return false;
@@ -171,7 +173,7 @@ class GopayPool {
             if (slot) {
                 slot.status = 'resetting';
                 this._saveState(slots);
-                console.log(`[Pool] Slot ${id} status: RESETTING...`);
+                this._logPool(`Slot ${id} merubah status -> RESETTING...`);
                 return true;
             }
             return false;
@@ -186,7 +188,7 @@ class GopayPool {
             if (index !== -1) {
                 const slot = slots[index];
                 if (slot.status === 'available') {
-                    console.log(`[Pool] Slot ${id} reported Reset Done, but was already available. Ignoring.`);
+                    this._logPool(`Slot ${id} lapor Reset Done, tapi nomor sudah Available. (Abaikan)`);
                     return true;
                 }
                 const prev = slot.status;
@@ -198,7 +200,7 @@ class GopayPool {
                 slots.push(slot);
 
                 this._saveState(slots);
-                console.log(`[Pool] Slot ${id} Reset Done (${prev} -> available). Siap digunakan task berikutnya.`);
+                this._logPool(`Slot ${id} selesai di-Reset (${prev} -> available). Siap dipinjam robot berikutnya!`);
                 return true;
             }
             return false;
@@ -214,7 +216,7 @@ class GopayPool {
                 slot.status = 'available';
                 slot.claimedAt = null;
                 if (prev !== 'available') {
-                    console.log(`[Pool] RESET-ALL: Slot ${slot.id} (${prev} -> available)`);
+                    this._logPool(`Command RESET-ALL: Slot ${slot.id} dipaksa bebas (${prev} -> available)`);
                     changedSlots.push(slot);
                 }
             });
