@@ -77,10 +77,24 @@ class GopayPool {
                     
                     const newSlots = data.map(slot => {
                         const existing = currentState.find(s => s.id === slot.id);
+                        if (existing) {
+                            // Masukkan config baru tapi pertahankan status dan analytics lama
+                            return {
+                                ...slot,
+                                status: existing.status,
+                                claimedAt: existing.claimedAt,
+                                usageCount: existing.usageCount || 0,
+                                resetCount: existing.resetCount || 0,
+                                usageHistory: existing.usageHistory || []
+                            };
+                        }
                         return {
                             ...slot,
-                            status: existing ? existing.status : 'available',
-                            claimedAt: existing ? existing.claimedAt : null
+                            status: 'available',
+                            claimedAt: null,
+                            usageCount: 0,
+                            resetCount: 0,
+                            usageHistory: []
                         };
                     });
                     
@@ -116,6 +130,7 @@ class GopayPool {
                 const mergedState = data.map(slot => {
                     const existing = currentState.find(s => s.id === slot.id);
                     if (existing) {
+                        // Update config fields but KEEP ALL status/analytics fields
                         return {
                             ...existing,
                             phone: slot.phone,
@@ -127,7 +142,10 @@ class GopayPool {
                     return {
                         ...slot,
                         status: 'available',
-                        claimedAt: null
+                        claimedAt: null,
+                        usageCount: 0,
+                        resetCount: 0,
+                        usageHistory: []
                     };
                 });
                 

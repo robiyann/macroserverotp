@@ -360,11 +360,8 @@ app.get('/', (req, res) => {
 
     const gopayStatus = gopayPool.getStatus(); // Need to fetch analytics status
 
-    // Optional: Kita import data raw state gopay untuk dapetin resetCount dan usageCount. Biar lebih lengkap:
-    const rawGopayState = gopayPool._loadState ? gopayPool._loadState() : gopayStatus; // workaround to get internal state if possible, though getStatus can return it too.
-    
-    // Tapi kita bisa enrich getStatus(). Mari kita load data pool dari gopayPool
-    const poolState = require('./gopay_state.json');
+    // Load data pool secara live dari file (jangan pakai require karena di-cache nodejs)
+    const poolState = gopayPool._loadState();
 
     const html = `
     <html>
