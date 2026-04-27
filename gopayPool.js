@@ -102,6 +102,47 @@ class GopayPool {
         }
     }
 
+    reload() {
+        return this._withLock(() => {
+            try {
+                if (!fs.existsSync(this.configPath)) {
+                    this._logPool(`Config tidak ditemukan di ${this.configPath} saat reload.`, true);
+                    return { success: false, message: 'Config file not found' };
+                }
+
+                const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                let currentState = this._loadState();
+                
+                const mergedState = data.map(slot => {
+                    const existing = currentState.find(s => s.id === slot.id);
+                    if (existing) {
+                        return {
+                            ...existing,
+                            phone: slot.phone,
+                            pin: slot.pin,
+                            device_id: slot.device_id,
+                            webhook_action: slot.webhook_action
+                        };
+                    }
+                    return {
+                        ...slot,
+                        status: 'available',
+                        claimedAt: null
+                    };
+                });
+                
+                this._saveState(mergedState);
+                this._logPool(`Config di-reload. Total slot sekarang: ${mergedState.length}`);
+                return { success: true, count: mergedState.length };
+
+            } catch (e) {
+                this._logPool(`Gagal reload pool config: ${e.message}`, true);
+                return { success: false, message: e.message };
+            }
+        });
+    }
+
+
     startCleanupInterval() {
         setInterval(() => {
             this._withLock(() => {
@@ -135,6 +176,18 @@ class GopayPool {
             if (slot) {
                 slot.status = 'in_use';
                 slot.claimedAt = Date.now();
+                
+                // Analytics Tracking
+                slot.usageCount = (slot.usageCount || 0) + 1;
+                if (!slot.usageHistory) slot.usageHistory = [];
+                slot.usageHistory.unshift({
+                    event: 'claimed',
+                    timestamp: new Date().toISOString()
+                });
+                if (slot.usageHistory.length > 5) {
+                    slot.usageHistory.pop(); // Keep only last 5
+                }
+                
                 this._saveState(slots);
                 return { ...slot };
             }
@@ -152,6 +205,13 @@ class GopayPool {
                 const prev = slot.status;
                 slot.status = 'available';
                 slot.claimedAt = null;
+                
+                if (!slot.usageHistory) slot.usageHistory = [];
+                slot.usageHistory.unshift({
+                    event: 'released_manually',
+                    timestamp: new Date().toISOString()
+                });
+                if (slot.usageHistory.length > 5) slot.usageHistory.pop();
                 
                 // Round-robin: pindahkan slot ke antrian paling belakang setelah dipakai
                 slots.splice(index, 1);
@@ -172,6 +232,14 @@ class GopayPool {
             
             if (slot) {
                 slot.status = 'resetting';
+                
+                if (!slot.usageHistory) slot.usageHistory = [];
+                slot.usageHistory.unshift({
+                    event: 'resetting_triggered',
+                    timestamp: new Date().toISOString()
+                });
+                if (slot.usageHistory.length > 5) slot.usageHistory.pop();
+                
                 this._saveState(slots);
                 this._logPool(`Slot ${id} merubah status -> RESETTING...`);
                 return true;
@@ -194,6 +262,14 @@ class GopayPool {
                 const prev = slot.status;
                 slot.status = 'available';
                 slot.claimedAt = null;
+
+                slot.resetCount = (slot.resetCount || 0) + 1;
+                if (!slot.usageHistory) slot.usageHistory = [];
+                slot.usageHistory.unshift({
+                    event: 'reset_done',
+                    timestamp: new Date().toISOString()
+                });
+                if (slot.usageHistory.length > 5) slot.usageHistory.pop();
 
                 // Round-robin: pindah ke belakang antrian agar giliran merata
                 slots.splice(index, 1);

@@ -184,6 +184,17 @@ app.get('/gopay/status', (req, res) => {
     res.json(gopayPool.getStatus());
 });
 
+// Reload config GoPay Pool tanpa restart
+app.get('/gopay/reload', (req, res) => {
+    const result = gopayPool.reload();
+    if (result.success) {
+        logHelper('[POOL_ADMIN]', `Command Reload dieksekusi. Total slot aktif: ${result.count}`);
+        res.json(result);
+    } else {
+        res.status(500).json(result);
+    }
+});
+
 // Reset SEMUA slot ke available (admin/recovery endpoint)
 app.get('/gopay/reset-all', (req, res) => {
     const before = gopayPool.getStatus();
@@ -347,18 +358,33 @@ app.get('/', (req, res) => {
         </tr>
     `).join('');
 
+    const gopayStatus = gopayPool.getStatus(); // Need to fetch analytics status
+
+    // Optional: Kita import data raw state gopay untuk dapetin resetCount dan usageCount. Biar lebih lengkap:
+    const rawGopayState = gopayPool._loadState ? gopayPool._loadState() : gopayStatus; // workaround to get internal state if possible, though getStatus can return it too.
+    
+    // Tapi kita bisa enrich getStatus(). Mari kita load data pool dari gopayPool
+    const poolState = require('./gopay_state.json');
+
     const html = `
     <html>
     <head>
         <title>OTP Server Dashboard</title>
         <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px; }
-            .container { max-width: 1000px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+            .container { max-width: 1200px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 20px; }
             h1 { color: #fff; border-bottom: 2px solid #555; padding-bottom: 10px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            h2 { color: #00d4ff; font-weight: normal; margin-top: 5px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
             th { text-align: left; background: #3d3d3d; padding: 10px; }
-            .refresh { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; float: right; }
+            td { padding: 8px; border-bottom: 1px solid #444; }
+            .refresh { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; float: right; margin-left: 10px; }
             .refresh:hover { background: #0056b3; }
+            .history-pill { background: #444; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; margin: 2px 0; display: inline-block; border-left: 3px solid #666; }
+            .status-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.85em; text-transform: uppercase; }
+            .badge-available { background: #1e7e34; color: white; }
+            .badge-in_use { background: #d39e00; color: #1a1a1a; }
+            .badge-resetting { background: #117a8b; color: white; }
         </style>
         <script>
             setTimeout(() => location.reload(), 5000);
@@ -367,8 +393,47 @@ app.get('/', (req, res) => {
     <body>
         <div class="container">
             <button class="refresh" onclick="location.reload()">Refresh Now</button>
-            <h1>OTP Server Dashboard</h1>
-            <p>Monitoring WhatsApp Notifications via MacroDroid</p>
+            <button class="refresh" style="background:#28a745;" onclick="fetch('/gopay/reload').then(r=>r.json()).then(d=>alert('Reload: '+d.count+' slots')).then(()=>location.reload())">Reload Pool</button>
+            <h1>GoPay Device Stats</h1>
+            <p>Pool Usage and Analytics</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID (Srv)</th>
+                        <th>Phone</th>
+                        <th>Status</th>
+                        <th>Total Used</th>
+                        <th>Total Reset</th>
+                        <th>Recent History</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${poolState.map(s => {
+                        let statusClass = 'badge-available';
+                        if(s.status==='in_use') statusClass = 'badge-in_use';
+                        if(s.status==='resetting') statusClass = 'badge-resetting';
+                        
+                        const historyHtml = (s.usageHistory || []).map(h => 
+                            '<div class="history-pill">' + h.event + ' <span style="color:#aaa;font-size:0.9em">(' + new Date(h.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}) + ')</span></div>'
+                        ).join('');
+
+                        return `
+                        <tr>
+                            <td style="color: #ffa500; font-weight:bold;">${s.id}</td>
+                            <td style="color: #00d4ff;">${s.phone}</td>
+                            <td><span class="status-badge ${statusClass}">${s.status}</span></td>
+                            <td style="font-weight:bold; color: #fff;">${s.usageCount || 0}x</td>
+                            <td style="color: #bbb;">${s.resetCount || 0}x</td>
+                            <td style="max-width: 300px; font-size: 0.9em; line-height:1.2;">${historyHtml || '<i style="color:#666">No Activity</i>'}</td>
+                        </tr>
+                        `;
+                    }).join('') || '<tr><td colspan="6" style="text-align:center;">No pool data</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="container">
+            <h2>Live OTP Logs</h2>
             <table>
                 <thead>
                     <tr>
@@ -382,15 +447,15 @@ app.get('/', (req, res) => {
                     </tr>
                 </thead>
                 <tbody>
-                    ${otpData.map(item => `
+                    ${otpData.slice(0, 50).map(item => `
                         <tr>
-                            <td style="padding: 10px; border-bottom: 1px solid #444;">${new Date(item.timestamp).toLocaleString()}</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444; color: #ffa500;">${item.server_number || '-'}</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444; color: #00d4ff;">${item.PhoneNumber || '-'}</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444;"><span style="background: #555; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">${item.status || '-'}</span></td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444;">${item.sender || '-'}</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444;">${item.text || '-'}</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #444; font-weight: bold; color: #00ff00;">${item.otp || '-'}</td>
+                            <td>${new Date(item.timestamp).toLocaleString()}</td>
+                            <td style="color: #ffa500;">${item.server_number || '-'}</td>
+                            <td style="color: #00d4ff;">${item.PhoneNumber || '-'}</td>
+                            <td><span style="background: #555; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">${item.status || '-'}</span></td>
+                            <td>${item.sender || '-'}</td>
+                            <td style="max-width: 400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${item.text}">${item.text || '-'}</td>
+                            <td style="font-weight: bold; color: #00ff00;">${item.otp || '-'}</td>
                         </tr>
                     `).join('') || '<tr><td colspan="7" style="text-align:center; padding: 20px;">Waiting for notifications...</td></tr>'}
                 </tbody>
