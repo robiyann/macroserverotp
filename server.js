@@ -170,13 +170,25 @@ app.get('/gopay/claim', (req, res) => {
     }
 });
 
-// Release slot (jika autopay gagal, kembali ke available tanpa reset)
+// Release slot (kemudian otomatis reset-link ke HP agar slot dijamin bersih)
 app.get('/gopay/release', (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing slot id' });
     
-    const success = gopayPool.release(id);
-    res.json({ success });
+    const slots = gopayPool._loadState();
+    const slot = slots.find(s => s.id == id || s.server_number == id);
+    
+    if (slot && slot.webhook_action && slot.device_id) {
+        gopayPool.markResetting(slot.id);
+        triggerAction(slot.device_id, slot.webhook_action).catch(err => {
+            console.error(`[Pool] Gagal auto-reset slot ${id} saat release: ${err.message}`);
+        });
+        res.json({ success: true, message: "Slot returned and is now resetting" });
+    } else {
+        // Fallback or missing data
+        const success = gopayPool.release(id);
+        res.json({ success, message: "Slot forcefully released (no webhook info)" });
+    }
 });
 
 // Cek status semua slot untuk monitoring
