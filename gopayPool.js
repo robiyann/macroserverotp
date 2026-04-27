@@ -205,6 +205,24 @@ class GopayPool {
         });
     }
 
+    resetAll() {
+        return this._withLock(() => {
+            const slots = this._loadState();
+            let changedSlots = [];
+            slots.forEach(slot => {
+                const prev = slot.status;
+                slot.status = 'available';
+                slot.claimedAt = null;
+                if (prev !== 'available') {
+                    console.log(`[Pool] RESET-ALL: Slot ${slot.id} (${prev} -> available)`);
+                    changedSlots.push(slot);
+                }
+            });
+            this._saveState(slots);
+            return changedSlots; // Return list of reset slots so server.js can trigger their webhooks
+        });
+    }
+
     getStatus() {
         const now = Date.now();
         const slots = this._loadState();

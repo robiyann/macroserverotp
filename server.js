@@ -176,21 +176,20 @@ app.get('/gopay/status', (req, res) => {
 // Reset SEMUA slot ke available (admin/recovery endpoint)
 app.get('/gopay/reset-all', (req, res) => {
     const before = gopayPool.getStatus();
-    gopayPool.slots.forEach(slot => {
-        const prev = slot.status;
-        slot.status = 'available';
-        if (prev !== 'available') {
-            console.log(`[Pool] RESET-ALL: Slot ${slot.id} (${prev} -> available)`);
-        }
-        
-        // AUTO TRIGGER RESET-LINK on all slots
+    
+    // Internal reset method handles the file lock + array saving
+    const changedSlots = gopayPool.resetAll() || [];
+    
+    // AUTO TRIGGER RESET-LINK on all slots
+    changedSlots.forEach(slot => {
         if (slot.device_id && slot.webhook_action) {
             triggerAction(slot.device_id, slot.webhook_action).catch(() => {});
         }
     });
+
     const after = gopayPool.getStatus();
-    console.log(`[Pool] RESET-ALL done. ${after.length} slots reset to available + webhooks triggered.`);
-    res.json({ success: true, before, after });
+    console.log(`[Pool] RESET-ALL done. ${changedSlots.length} slots reset to available + webhooks triggered.`);
+    res.json({ success: true, resetCount: changedSlots.length, before, after });
 });
 
 /**
