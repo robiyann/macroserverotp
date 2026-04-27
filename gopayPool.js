@@ -57,6 +57,41 @@ class GopayPool {
         }
     }
 
+    _mergeConfigIntoState(configData, currentState) {
+        // 1. Ambil semua yang ada di currentState tapi masih ada di configData
+        let merged = currentState.map(existing => {
+            const config = configData.find(c => c.id === existing.id);
+            if (config) {
+                return {
+                    ...config,
+                    status: existing.status,
+                    claimedAt: existing.claimedAt,
+                    usageCount: existing.usageCount || 0,
+                    resetCount: existing.resetCount || 0,
+                    usageHistory: existing.usageHistory || []
+                };
+            }
+            return null;
+        }).filter(Boolean);
+
+        // 2. Tambahkan nomor baru dari config yang belum ada di state (taruh di belakang)
+        configData.forEach(slot => {
+            const alreadyIn = merged.some(m => m.id === slot.id);
+            if (!alreadyIn) {
+                merged.push({
+                    ...slot,
+                    status: 'available',
+                    claimedAt: null,
+                    usageCount: 0,
+                    resetCount: 0,
+                    usageHistory: []
+                });
+            }
+        });
+
+        return merged;
+    }
+
     _saveState(stateArray) {
         fs.writeFileSync(this.statePath, JSON.stringify(stateArray, null, 2));
     }
@@ -75,32 +110,11 @@ class GopayPool {
                     const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
                     let currentState = this._loadState();
                     
-                    const newSlots = data.map(slot => {
-                        const existing = currentState.find(s => s.id === slot.id);
-                        if (existing) {
-                            // Masukkan config baru tapi pertahankan status dan analytics lama
-                            return {
-                                ...slot,
-                                status: existing.status,
-                                claimedAt: existing.claimedAt,
-                                usageCount: existing.usageCount || 0,
-                                resetCount: existing.resetCount || 0,
-                                usageHistory: existing.usageHistory || []
-                            };
-                        }
-                        return {
-                            ...slot,
-                            status: 'available',
-                            claimedAt: null,
-                            usageCount: 0,
-                            resetCount: 0,
-                            usageHistory: []
-                        };
-                    });
+                    const newSlots = this._mergeConfigIntoState(data, currentState);
                     
                     this._saveState(newSlots);
                     this.initialized = true;
-                    this._logPool(`Memuat ${newSlots.length} Data GoPay. Mode: Anti-Collision PM2 Active!`);
+                    this._logPool(`Memuat ${newSlots.length} Data GoPay. Fairness Rotation: ACTIVE.`);
                 } else {
                     this._logPool(`Config tidak ditemukan di ${this.configPath}. Fallback manual.`, true);
                     this.initialized = false;
@@ -127,30 +141,10 @@ class GopayPool {
                 const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
                 let currentState = this._loadState();
                 
-                const mergedState = data.map(slot => {
-                    const existing = currentState.find(s => s.id === slot.id);
-                    if (existing) {
-                        // Update config fields but KEEP ALL status/analytics fields
-                        return {
-                            ...existing,
-                            phone: slot.phone,
-                            pin: slot.pin,
-                            device_id: slot.device_id,
-                            webhook_action: slot.webhook_action
-                        };
-                    }
-                    return {
-                        ...slot,
-                        status: 'available',
-                        claimedAt: null,
-                        usageCount: 0,
-                        resetCount: 0,
-                        usageHistory: []
-                    };
-                });
+                const mergedState = this._mergeConfigIntoState(data, currentState);
                 
                 this._saveState(mergedState);
-                this._logPool(`Config di-reload. Total slot sekarang: ${mergedState.length}`);
+                this._logPool(`Config di-reload. Total slot: ${mergedState.length}. Urutan antrean tetap dipertahankan.`);
                 return { success: true, count: mergedState.length };
 
             } catch (e) {
