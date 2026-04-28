@@ -216,6 +216,13 @@ class GopayPool {
             if (index !== -1) {
                 const slot = slots[index];
                 const prev = slot.status;
+
+                // Guard: hanya release slot yang memang in_use atau resetting
+                if (prev === 'available') {
+                    this._logPool(`Slot ${id} sudah available, skip release.`);
+                    return true; // Tidak error, tapi tidak perlu aksi
+                }
+
                 slot.status = 'available';
                 slot.claimedAt = null;
                 
@@ -238,12 +245,49 @@ class GopayPool {
         });
     }
 
+    /**
+     * Atomic release + reset: membaca state dan menentukan aksi dalam satu lock.
+     * Mengembalikan { action, slot } dimana action = 'reset' | 'skip' | 'not_found'
+     */
+    releaseWithReset(id) {
+        return this._withLock(() => {
+            const slots = this._loadState();
+            const slot = slots.find(s => s.id == id || s.server_number == id);
+            
+            if (!slot) return { action: 'not_found' };
+
+            // Hanya reset jika slot memang sedang in_use
+            if (slot.status !== 'in_use') {
+                this._logPool(`Slot ${id} bukan in_use (status: ${slot.status}), skip reset.`);
+                return { action: 'skip', slot: { ...slot } };
+            }
+
+            slot.status = 'resetting';
+            if (!slot.usageHistory) slot.usageHistory = [];
+            slot.usageHistory.unshift({
+                event: 'resetting_triggered',
+                timestamp: new Date().toISOString()
+            });
+            if (slot.usageHistory.length > 5) slot.usageHistory.pop();
+            
+            this._saveState(slots);
+            this._logPool(`Slot ${id} merubah status -> RESETTING (via releaseWithReset)`);
+            return { action: 'reset', slot: { ...slot } };
+        });
+    }
+
     markResetting(id) {
         return this._withLock(() => {
             const slots = this._loadState();
             const slot = slots.find(s => s.id == id || s.server_number == id);
             
             if (slot) {
+                // Guard: hanya set resetting jika memang sedang in_use
+                if (slot.status !== 'in_use') {
+                    this._logPool(`Slot ${id} bukan in_use (status: ${slot.status}), skip markResetting.`);
+                    return false;
+                }
+
                 slot.status = 'resetting';
                 
                 if (!slot.usageHistory) slot.usageHistory = [];

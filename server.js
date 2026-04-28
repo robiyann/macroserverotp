@@ -175,20 +175,26 @@ app.get('/gopay/release', (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing slot id' });
     
-    const slots = gopayPool._loadState();
-    const slot = slots.find(s => s.id == id || s.server_number == id);
+    // Atomic: baca state + cek status + set resetting dalam satu lock
+    const result = gopayPool.releaseWithReset(parseInt(id) || id);
     
-    if (slot && slot.webhook_action && slot.device_id) {
-        gopayPool.markResetting(slot.id);
-        triggerAction(slot.device_id, slot.webhook_action).catch(err => {
+    if (result.action === 'not_found') {
+        return res.status(404).json({ error: `Slot ${id} not found` });
+    }
+    
+    if (result.action === 'skip') {
+        // Slot bukan in_use (mungkin sudah available/resetting) — jangan trigger reset ulang
+        return res.json({ success: true, message: `Slot ${id} is ${result.slot.status}, no reset needed` });
+    }
+    
+    // action === 'reset' — slot sudah di-set ke 'resetting', trigger webhook
+    if (result.slot.device_id && result.slot.webhook_action) {
+        triggerAction(result.slot.device_id, result.slot.webhook_action).catch(err => {
             console.error(`[Pool] Gagal auto-reset slot ${id} saat release: ${err.message}`);
         });
-        res.json({ success: true, message: "Slot returned and is now resetting" });
-    } else {
-        // Fallback or missing data
-        const success = gopayPool.release(id);
-        res.json({ success, message: "Slot forcefully released (no webhook info)" });
     }
+    
+    res.json({ success: true, message: "Slot returned and is now resetting" });
 });
 
 // Cek status semua slot untuk monitoring
