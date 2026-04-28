@@ -182,9 +182,10 @@ class GopayPool {
         
         return this._withLock(() => {
             const slots = this._loadState();
+            const now = Date.now();
             
-            // Only claim truly available slots
-            const slot = slots.find(s => s.status === 'available');
+            // Only claim truly available slots that are past their cooldown
+            const slot = slots.find(s => s.status === 'available' && (!s.cooldownUntil || now > s.cooldownUntil));
             if (slot) {
                 slot.status = 'in_use';
                 slot.claimedAt = Date.now();
@@ -274,6 +275,8 @@ class GopayPool {
                 const prev = slot.status;
                 slot.status = 'available';
                 slot.claimedAt = null;
+                slot.cooldownUntil = Date.now() + 5000; // 5-second cooldown to ensure phone is completely unlinked
+
 
                 slot.resetCount = (slot.resetCount || 0) + 1;
                 if (!slot.usageHistory) slot.usageHistory = [];
