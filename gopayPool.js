@@ -14,7 +14,7 @@ class GopayPool {
         let locked = false;
         let attempts = 0;
         const maxAttempts = 100; // 100 * 50ms = 5 seconds
-        
+
         while (!locked && attempts < maxAttempts) {
             try {
                 fs.mkdirSync(this.lockPath);
@@ -27,10 +27,10 @@ class GopayPool {
                         if (Date.now() - stat.mtimeMs > 10000) {
                             fs.rmdirSync(this.lockPath);
                         }
-                    } catch (e) {}
-                    
+                    } catch (e) { }
+
                     attempts++;
-                    const start = Date.now(); while(Date.now() - start < 50) {} // busy wait 50ms
+                    const start = Date.now(); while (Date.now() - start < 50) { } // busy wait 50ms
                 } else {
                     throw err;
                 }
@@ -40,11 +40,11 @@ class GopayPool {
             console.error('[Pool] Timeout Waiting for File Lock!');
             return null; // failed to acquire lock
         }
-        
+
         try {
             return callback();
         } finally {
-            try { fs.rmdirSync(this.lockPath); } catch (e) {}
+            try { fs.rmdirSync(this.lockPath); } catch (e) { }
         }
     }
 
@@ -109,9 +109,9 @@ class GopayPool {
                 if (fs.existsSync(this.configPath)) {
                     const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
                     let currentState = this._loadState();
-                    
+
                     const newSlots = this._mergeConfigIntoState(data, currentState);
-                    
+
                     this._saveState(newSlots);
                     this.initialized = true;
                     this._logPool(`Memuat ${newSlots.length} Data GoPay. Fairness Rotation: ACTIVE.`);
@@ -124,7 +124,7 @@ class GopayPool {
                 this.initialized = false;
             }
         });
-        
+
         if (this.initialized) {
             this.startCleanupInterval();
         }
@@ -140,9 +140,9 @@ class GopayPool {
 
                 const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
                 let currentState = this._loadState();
-                
+
                 const mergedState = this._mergeConfigIntoState(data, currentState);
-                
+
                 this._saveState(mergedState);
                 this._logPool(`Config di-reload. Total slot: ${mergedState.length}. Urutan antrean tetap dipertahankan.`);
                 return { success: true, count: mergedState.length };
@@ -179,17 +179,19 @@ class GopayPool {
 
     claim() {
         if (!this.initialized) return null;
-        
+
         return this._withLock(() => {
             const slots = this._loadState();
-            const now = Date.now();
-            
-            // Only claim truly available slots that are past their cooldown
-            const slot = slots.find(s => s.status === 'available' && (!s.cooldownUntil || now > s.cooldownUntil));
-            if (slot) {
+
+            // Collect all available slots and pick one randomly to minimize concurrent race conditions
+            const availableSlots = slots.filter(s => s.status === 'available');
+            if (availableSlots.length > 0) {
+                const randomSlot = availableSlots[Math.floor(Math.random() * availableSlots.length)];
+                const slot = slots.find(s => s.id === randomSlot.id);
+                
                 slot.status = 'in_use';
                 slot.claimedAt = Date.now();
-                
+
                 // Analytics Tracking
                 slot.usageCount = (slot.usageCount || 0) + 1;
                 if (!slot.usageHistory) slot.usageHistory = [];
@@ -200,7 +202,7 @@ class GopayPool {
                 if (slot.usageHistory.length > 5) {
                     slot.usageHistory.pop(); // Keep only last 5
                 }
-                
+
                 this._saveState(slots);
                 return { ...slot };
             }
@@ -212,31 +214,24 @@ class GopayPool {
         return this._withLock(() => {
             const slots = this._loadState();
             const index = slots.findIndex(s => s.id == id || s.server_number == id);
-            
+
             if (index !== -1) {
                 const slot = slots[index];
                 const prev = slot.status;
-
-                // Guard: hanya release slot yang memang in_use atau resetting
-                if (prev === 'available') {
-                    this._logPool(`Slot ${id} sudah available, skip release.`);
-                    return true; // Tidak error, tapi tidak perlu aksi
-                }
-
                 slot.status = 'available';
                 slot.claimedAt = null;
-                
+
                 if (!slot.usageHistory) slot.usageHistory = [];
                 slot.usageHistory.unshift({
                     event: 'released_manually',
                     timestamp: new Date().toISOString()
                 });
                 if (slot.usageHistory.length > 5) slot.usageHistory.pop();
-                
+
                 // Round-robin: pindahkan slot ke antrian paling belakang setelah dipakai
                 slots.splice(index, 1);
                 slots.push(slot);
-                
+
                 this._saveState(slots);
                 this._logPool(`Slot ${id} dibebaskan (${prev} -> available). Antrean digeser ke belakang.`);
                 return true;
@@ -245,34 +240,37 @@ class GopayPool {
         });
     }
 
-    /**
-     * Atomic release + reset: membaca state dan menentukan aksi dalam satu lock.
-     * Mengembalikan { action, slot } dimana action = 'reset' | 'skip' | 'not_found'
-     */
     releaseWithReset(id) {
         return this._withLock(() => {
             const slots = this._loadState();
-            const slot = slots.find(s => s.id == id || s.server_number == id);
-            
-            if (!slot) return { action: 'not_found' };
+            const index = slots.findIndex(s => s.id == id || s.server_number == id);
 
-            // Hanya reset jika slot memang sedang in_use
+            if (index === -1) {
+                return { action: 'not_found' };
+            }
+
+            const slot = slots[index];
             if (slot.status !== 'in_use') {
-                this._logPool(`Slot ${id} bukan in_use (status: ${slot.status}), skip reset.`);
-                return { action: 'skip', slot: { ...slot } };
+                return { action: 'skip', slot };
             }
 
             slot.status = 'resetting';
+            slot.claimedAt = null;
+
             if (!slot.usageHistory) slot.usageHistory = [];
             slot.usageHistory.unshift({
-                event: 'resetting_triggered',
+                event: 'released_w_reset',
                 timestamp: new Date().toISOString()
             });
             if (slot.usageHistory.length > 5) slot.usageHistory.pop();
-            
+
+            // Pindahkan ke paling belakang agar antrian fair (round-robin)
+            slots.splice(index, 1);
+            slots.push(slot);
+
             this._saveState(slots);
-            this._logPool(`Slot ${id} merubah status -> RESETTING (via releaseWithReset)`);
-            return { action: 'reset', slot: { ...slot } };
+            this._logPool(`Slot ${id} dilepaskan -> status menjadi RESETTING, trigger Action di HP.`);
+            return { action: 'reset', slot };
         });
     }
 
@@ -280,23 +278,17 @@ class GopayPool {
         return this._withLock(() => {
             const slots = this._loadState();
             const slot = slots.find(s => s.id == id || s.server_number == id);
-            
-            if (slot) {
-                // Guard: hanya set resetting jika memang sedang in_use
-                if (slot.status !== 'in_use') {
-                    this._logPool(`Slot ${id} bukan in_use (status: ${slot.status}), skip markResetting.`);
-                    return false;
-                }
 
+            if (slot) {
                 slot.status = 'resetting';
-                
+
                 if (!slot.usageHistory) slot.usageHistory = [];
                 slot.usageHistory.unshift({
                     event: 'resetting_triggered',
                     timestamp: new Date().toISOString()
                 });
                 if (slot.usageHistory.length > 5) slot.usageHistory.pop();
-                
+
                 this._saveState(slots);
                 this._logPool(`Slot ${id} merubah status -> RESETTING...`);
                 return true;
@@ -309,7 +301,7 @@ class GopayPool {
         return this._withLock(() => {
             const slots = this._loadState();
             const index = slots.findIndex(s => s.id == id || s.server_number == id);
-            
+
             if (index !== -1) {
                 const slot = slots[index];
                 if (slot.status === 'available') {
@@ -319,8 +311,6 @@ class GopayPool {
                 const prev = slot.status;
                 slot.status = 'available';
                 slot.claimedAt = null;
-                slot.cooldownUntil = Date.now() + 5000; // 5-second cooldown to ensure phone is completely unlinked
-
 
                 slot.resetCount = (slot.resetCount || 0) + 1;
                 if (!slot.usageHistory) slot.usageHistory = [];
