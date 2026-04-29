@@ -46,6 +46,22 @@ function saveData() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(otpData, null, 2));
 }
 
+// [NEW] Phone Success Stats
+const STATS_FILE = path.join(__dirname, 'phone_stats.json');
+let phoneStats = {};
+if (fs.existsSync(STATS_FILE)) {
+    try {
+        phoneStats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+    } catch (e) {
+        console.error('Error loading stats file:', e);
+        phoneStats = {};
+    }
+}
+
+function saveStats() {
+    fs.writeFileSync(STATS_FILE, JSON.stringify(phoneStats, null, 2));
+}
+
 // OTP Subscriptions (request queue)
 let subscriptions = []; // { requestId, phone, server, otp, createdAt }
 const SUB_TTL_MS = 90 * 1000; // 90 detik TTL
@@ -482,6 +498,46 @@ app.get('/dashboard/otps', (req, res) => {
     res.json(fresh.slice(0, 50));
 });
 
+// [NEW] Report Plus Success Endpoint
+app.post('/report/plus-success', (req, res) => {
+    const { phone, serverNumber, email, timestamp } = req.body;
+    
+    if (!phone) {
+        return res.status(400).json({ error: 'Missing phone' });
+    }
+
+    logHelper('[PLUS_SUCCESS]', `🔥 AKUN PLUS BERHASIL! No: ${phone} (Server: ${serverNumber || '?'}), Email: ${email}`);
+
+    if (!phoneStats[phone]) {
+        phoneStats[phone] = {
+            phone: phone,
+            serverNumber: serverNumber || 'Unknown',
+            successCount: 0,
+            lastSuccess: null,
+            history: []
+        };
+    }
+
+    phoneStats[phone].successCount += 1;
+    phoneStats[phone].lastSuccess = timestamp || new Date().toISOString();
+    
+    // Keep only last 10 history records per phone to avoid ballooning
+    phoneStats[phone].history.unshift({ email: email || 'Unknown', timestamp: phoneStats[phone].lastSuccess });
+    if (phoneStats[phone].history.length > 10) phoneStats[phone].history.pop();
+    
+    // Update server number in case it changed
+    if (serverNumber) phoneStats[phone].serverNumber = serverNumber;
+
+    saveStats();
+    res.json({ success: true, count: phoneStats[phone].successCount });
+});
+
+app.get('/report/phone-stats', (req, res) => {
+    // Convert object to array for easy sorting in frontend
+    const statsArray = Object.values(phoneStats);
+    res.json(statsArray);
+});
+
 app.get('/', (req, res) => {
     const html = [
     '<!DOCTYPE html>',
@@ -621,6 +677,16 @@ app.get('/', (req, res) => {
     '                </div>',
     '            </div>',
     '        </div>',
+    '        <div class="card" style="margin-top: 24px;">',
+    '            <h2>📊 Phone Success Stats</h2>',
+    '            <div style="overflow-x: auto;">',
+    '                <table><thead><tr>',
+    '                    <th>Phone</th><th>Server #</th><th>✅ Total Plus</th><th>Last Success</th>',
+    '                </tr></thead>',
+    '                <tbody id="stats-body"><tr><td colspan="4" style="text-align:center; padding:40px;">Loading...</td></tr></tbody>',
+    '                </table>',
+    '            </div>',
+    '        </div>',
     '    </div>',
     '',
     '    <div id="device-modal" class="modal">',
@@ -645,10 +711,13 @@ app.get('/', (req, res) => {
     '        try {',
     '            var devRes = await fetch("/dashboard/devices");',
     '            var otpRes = await fetch("/dashboard/otps");',
+    '            var statsRes = await fetch("/report/phone-stats");',
     '            var devices = await devRes.json();',
     '            var otps = await otpRes.json();',
+    '            var stats = await statsRes.json();',
     '            renderDevices(devices);',
     '            renderOTPs(otps);',
+    '            renderStats(stats);',
     '        } catch (e) { console.error("Update failed:", e); }',
     '    }',
     '',
@@ -700,6 +769,27 @@ app.get('/', (req, res) => {
     '            html += "</div>";',
     '        }',
     '        c.innerHTML = html;',
+    '    }',
+    '',
+    '    function renderStats(stats) {',
+    '        var tbody = document.getElementById("stats-body");',
+    '        if (!stats || stats.length === 0) {',
+    '            tbody.innerHTML = \'<tr><td colspan="4" style="text-align:center;padding:40px;color:#94a3b8;">No success data yet</td></tr>\';',
+    '            return;',
+    '        }',
+    '        stats.sort(function(a, b) { return b.successCount - a.successCount; });',
+    '        var rows = "";',
+    '        for (var i = 0; i < stats.length; i++) {',
+    '            var s = stats[i];',
+    '            var lastTime = s.lastSuccess ? new Date(s.lastSuccess).toLocaleString() : "-";',
+    '            rows += "<tr>"',
+    '                + \'<td style="font-family:JetBrains Mono,monospace;color:#00d4ff;">\' + s.phone + "</td>"',
+    '                + \'<td>\' + (s.serverNumber || "-") + "</td>"',
+    '                + \'<td style="font-weight:bold;color:var(--success); font-size:1.1rem;">\' + s.successCount + "</td>"',
+    '                + \'<td style="font-size:0.85rem;color:var(--text-muted);">\' + lastTime + "</td>"',
+    '                + "</tr>";',
+    '        }',
+    '        tbody.innerHTML = rows;',
     '    }',
     '',
     '    function openAddModal() {',
