@@ -432,10 +432,11 @@ app.get('/otp', (req, res) => {
     const { phone, server } = req.query;
     const now = Date.now();
     
-    // Safety filter to ensure we only return fresh OTPs
+    // Safety filter to ensure we only return fresh OTPs (24 hours)
+    const OTP_TTL_MS = 24 * 60 * 60 * 1000;
     const freshOtps = otpData.filter(item => {
         const age = now - new Date(item.timestamp).getTime();
-        return age < 30000;
+        return age < OTP_TTL_MS;
     });
 
     let result = freshOtps;
@@ -444,6 +445,8 @@ app.get('/otp', (req, res) => {
     if (!phone && !server) {
         return res.json(result);
     }
+    
+    if (phone) {
         // Match specific phone number
         result = result.filter(item => item.PhoneNumber === phone || item.PhoneNumber.includes(phone));
     }
