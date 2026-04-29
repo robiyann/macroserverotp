@@ -658,6 +658,7 @@ app.get('/', (req, res) => {
     '            tbody.innerHTML = \'<tr><td colspan="6" style="text-align:center;padding:40px;color:#94a3b8;">No devices configured</td></tr>\';',
     '            return;',
     '        }',
+    '        devices.sort(function(a, b) { return a.id - b.id; });',
     '        var rows = "";',
     '        for (var i = 0; i < devices.length; i++) {',
     '            var s = devices[i];',
